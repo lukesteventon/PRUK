@@ -258,6 +258,10 @@ breastcancer<-breastcancer %>%
 breastcancer %>% 
   filter(CYCLE_NUMBER>8) %>% 
   count(PSEUDONYMISED_PATIENTID) #n=284 patients with more than 8 cycles after correction
+
+breastcancer %>% 
+  filter(CYCLE_NUMBER>6) %>% 
+  select(PSEUDONYMISED_PATIENTID, DRUG_GROUP, ADMINISTRATION_DATE,CYCLE_NUMBER, DAYSFROMPREVIOUSADMIN)
 ```
 Clean column names changed by merging:
 ```{r}
@@ -602,6 +606,10 @@ gghistogram(descriptive, x = "numbercycles", fill = "darkblue",colour = "Commiss
 ```{r}
 ggplot(descriptive, aes(x = numbercycles, fill = REGIMEN, colour = REGIMEN)) + 
   geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(2:9), lim = c(0,8))
+
+descriptive %>% 
+  filter(numbercycles>6) %>% 
+  count(REGIMEN)
 ```
 Check number of cycles for ECT only:
 ```{r}
@@ -647,6 +655,73 @@ ECT_numbercyclesmean<-ECT_only %>%
   group_by(ORGANISATION_CODE_OF_PROVIDER.x) %>% 
   mutate(numbercyclesmean=mean(numbercycles)) %>% 
   mutate(numbercyclesmean=round(numbercyclesmean, 2))
+```
+
+Flag individual sites that have given any patients ECTx8:
+```{r}
+ECT_only %>% 
+  group_by(ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+  mutate(flag=ifelse(numbercycles>6,1,NA)) %>% 
+  fill(flag, .direction="updown") %>% 
+  distinct(ORGANISATION_CODE_OF_PROVIDER.x,.keep_all=T) %>% 
+  ungroup() %>% 
+  count(flag)
+```
+Count sites giving XX% of patients ECTx8
+```{r}
+sites<-ECT_only %>% 
+  count(ORGANISATION_CODE_OF_PROVIDER.x)
+
+ECT_8_cycles<-ECT_only %>% 
+  merge(sites, by ="ORGANISATION_CODE_OF_PROVIDER.x") %>% 
+  ungroup() %>%   
+  mutate(flag=ifelse(numbercycles>6,1,0)) %>% 
+  group_by(ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+  mutate(flag=sum(flag)) %>% 
+  fill(flag, .direction="updown") %>% 
+  distinct(ORGANISATION_CODE_OF_PROVIDER.x,.keep_all=T) %>% 
+  ungroup() %>% 
+  select(ORGANISATION_CODE_OF_PROVIDER.x,flag, n) %>% 
+  mutate(percentage=flag/n*100) %>% 
+  count(percentage,ORGANISATION_CODE_OF_PROVIDER.x)
+
+#Count percentage of patients given ECTx8 at each site. 
+#We will look at 0%, 10% and 25% thresholds to exclude all patients treated at sites giving ECT8 at these rates
+ECT_8_cycles %>% 
+  rename(ORGANISATION_CODE_OF_PROVIDER=ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+  merge(breastcancer, by = "ORGANISATION_CODE_OF_PROVIDER") %>% 
+  filter(REGIMEN=="ECT") %>% 
+  filter(percentage>0) %>% #n=4,422 patients treated at sites giving any patient ECTx8. This represents 70/174 sites in total
+  #filter(percentage>10) %>% #n=2,328 patients treated at sites giving more than 10% of patients ECTx8
+  #filter(percentage>25) %>% #n=1,174 patients treated at sites giving more than 25% of patients ECTx8
+  count(ORGANISATION_CODE_OF_PROVIDER) #n=5129 ECT patients
+
+breastcancer %>% 
+    count(ORGANISATION_CODE_OF_PROVIDER) 
+```
+Count the number of sites who didn't give any ECTx8
+```{r}
+ECT_8_cycles %>% 
+  rename(ORGANISATION_CODE_OF_PROVIDER=ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+  merge(breastcancer, by = "ORGANISATION_CODE_OF_PROVIDER") %>% 
+  filter(REGIMEN=="ECT") %>% 
+  filter(percentage<25) %>% 
+  #count(ORGANISATION_CODE_OF_PROVIDER) #n=59 sites of 129 (45% of sites)
+  count(PSEUDONYMISED_PATIENTID) #n=794 patients who were treated at sites that only gave ECTx6
+```
+
+Count numbers giving FECT x8
+```{r}
+#Count percentage of patients given ECTx8 at each site. 
+#We will look at 0%, 10% and 25% thresholds to exclude all patients treated at sites giving ECT8 at these rates
+FECTonly %>% 
+  rename(ORGANISATION_CODE_OF_PROVIDER=ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+  merge(breastcancer, by = "ORGANISATION_CODE_OF_PROVIDER") %>% 
+  filter(REGIMEN=="FECT") %>% 
+  filter(percentage>0) %>% #n=4,422 patients treated at sites giving any patient ECTx8
+ # filter(percentage>10) %>% #n=2,328 patients treated at sites giving more than 10% of patients ECTx8
+  #filter(percentage>25) %>% #n=1,174 patients treated at sites giving more than 25% of patients ECTx8
+  count(PSEUDONYMISED_PATIENTID) #n=5129 ECT patients
 ```
 
 Plots of data for ECT:
@@ -732,6 +807,22 @@ labs(
   y = expression(bar(y)), x = 'Group',
   title = 'Mean number of cycles of TC by NHS site'
 ) 
+
+#Caterpillar plot for TC:
+qplot(
+  data = TC_only_numbercycles, 
+  x = ORGANISATION_CODE_OF_PROVIDER.x,       ## order groups
+  y = numbercyclesmean
+, 
+  ymin=0,
+  ymax=4,
+  geom = c('errorbar', 'point'),
+) +
+labs(
+  y = expression(bar(y)), x = 'Group',
+  title = 'Mean number of cycles of TC by NHS site'
+) 
+
 ```
 
 Check number of cycles for EC only:
@@ -824,16 +915,16 @@ cumulative_dose_table%>%
 ```
 
 ```{r}
-cumulative_dose_table<-cumulative_dose_table %>% 
+cumulative_dose_table_EPI<-cumulative_dose_table %>% 
   group_by(PSEUDONYMISED_PATIENTID) %>% 
   filter(DRUG_GROUP=="EPIRUBICIN") %>% 
   mutate(cumulative_dose_bsa=cumulative_dose/BSA)
 
-cumulative_dose_table %>% 
+cumulative_dose_table_EPI %>% 
   filter(cumulative_dose>1000)
 
 qplot(
-  data = cumulative_dose_table, 
+  data = cumulative_dose_table_EPI, 
   x = REGIMEN,       ## order groups
   y = cumulative_dose_bsa
 , 
@@ -843,7 +934,7 @@ qplot(
 ) +
 labs(
   y = expression(bar(y)), x = 'Regimen',
-  title = 'Cumulative dose of epirubicin by regimen'
+  title = 'Cumulative dose of epirubicin by regimen' 
 ) 
 ```
 
