@@ -34,6 +34,47 @@ data<-data %>%
   distinct(PSEUDONYMISED_PATIENTID, DRUG_GROUP, ADMINISTRATION_DATE, .keep_all=T)
 ```
 
+Investigate completeness of surgery records as we currently have a large number of patients with no surgical record:
+```{r}
+table3 %>% 
+  filter(str_detect(EVENTDESC,"Surgery")) %>% 
+  merge(data, by = "PSEUDONYMISED_TUMOURID") %>% 
+  filter(str_detect(SITE_ICD10_O2,"C50")) %>% 
+  distinct(PSEUDONYMISED_TUMOURID,.keep_all=T) %>% 
+  count(EVENTDESC)
+
+table3 %>% 
+  filter(str_detect(EVENTDESC,"Surgery")) %>% 
+  merge(data, by = "PSEUDONYMISED_TUMOURID") %>% 
+  filter(str_detect(SITE_ICD10_O2,"C50")) %>% 
+  distinct(PSEUDONYMISED_TUMOURID,.keep_all=T)  %>% 
+  mutate(EVENTDATE=dmy(EVENTDATE)) %>% 
+  filter(EVENTDATE>"2012-12-31") %>% 
+  count(PSEUDONYMISED_TUMOURID) #n=16551 have a surgery record from 1/1/2014 onwards
+
+surgery_summary_stats<-table3 %>% 
+  filter(str_detect(EVENTDESC,"Surgery - curative")) %>% 
+  left_join(data, by = "PSEUDONYMISED_TUMOURID") %>% 
+  filter(str_detect(SITE_ICD10_O2,"C50")) %>% 
+  distinct(PSEUDONYMISED_TUMOURID,.keep_all=T)  %>% 
+  mutate(EVENTDATE=dmy(EVENTDATE)) %>% 
+  filter(EVENTDATE>"2012-12-31"&EVENTDATE<"2016-01-01") %>% 
+  mutate(ADMINISTRATION_DATE=dmy(ADMINISTRATION_DATE)) %>% 
+  group_by(PSEUDONYMISED_TUMOURID) %>% 
+  mutate(index=min(ADMINISTRATION_DATE)) %>% 
+  mutate(surgerytochemo=as.numeric(difftime(EVENTDATE, index, units = "days"))) %>% 
+  select(PSEUDONYMISED_TUMOURID, surgerytochemo, index, EVENTDATE,EVENTDESC) %>%
+  filter(surgerytochemo>-181&surgerytochemo<181) %>% 
+  mutate(modality=ifelse(surgerytochemo<0, "Adjuvant", "Neoadjuvant"))#surgery 6 months either side of first chemotherapy
+  
+surgery_summary_stats %>% 
+    summary() #12093 have surgery between 1/1/2013 and 1/1/2017
+
+surgery_summary_stats %>% 
+  ungroup() %>% 
+  count(modality) #n=9154 had adjuvant chemo (75%), 2946 neoadjuvant (25%)
+```
+
 Link surgeries:
 ```{r}
 #Create data table of surgeries
@@ -55,7 +96,7 @@ surgery_coded<-data %>%
   mutate(diff=as.numeric(difftime(ADMINISTRATION_DATE, EVENTDATE, units ="days"))) %>% 
   mutate(diff_min=min(diff)) %>% 
   mutate(diff_min=ifelse(diff_min>180|diff_min<(-180),NA,diff_min)) %>% 
-  mutate(surgery_setting=ifelse(diff_min>0&diff_min<181,"Adjuvant",NA)) %>% 
+  mutate(surgery_setting=ifelse(diff_min>-1&diff_min<181,"Adjuvant",NA)) %>% 
   mutate(surgery_setting=ifelse(diff_min<0&diff_min>-181,"Neoadjuvant",surgery_setting)) %>% 
   fill(surgery_setting,.direction="updown") %>% 
   mutate(surgery_setting=ifelse(is.na(surgery_setting),"No surgery",surgery_setting)) %>% 
@@ -87,6 +128,8 @@ data<-data %>%
 
 data%>% 
   count(PSEUDONYMISED_PATIENTID) #n=22,627
+
+data
 ```
 Filter breast cancer patients only"
 ```{r}
@@ -180,7 +223,11 @@ breastcancer %>%
 
 
 Filter out non-chemo drugs:
+N=1135 excluded - include this figure with the regimen numbers.
 ```{r}
+
+breastcancer %>% 
+    count(PSEUDONYMISED_PATIENTID) #n=17581
 breastcancer<-breastcancer %>% 
            filter(str_detect(DRUG_GROUP,"EPIRUBICIN|CYCLOPHOSPHAMIDE|FLUOROURACIL|DOCETAXEL"))
   
@@ -233,11 +280,20 @@ breastcancer<-breastcancer %>%
   select(-CYCLE_NUMBER.y)
 
 breastcancer %>% 
-filter(CYCLE_NUMBER>8) %>% 
+  
+filter(CYCLE_NUMBER>5) %>% 
   count(PSEUDONYMISED_PATIENTID) #n=352 patients with more than 8 cycles
+
 ```
 Need to correct cycle numbers for weekly regimens:
 ```{r}
+breastcancer %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  count(maxcycle)
+
+
 breastcancer<-breastcancer %>% 
   group_by(PSEUDONYMISED_PATIENTID, CYCLE_NUMBER) %>%
   arrange(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE) %>% 
@@ -256,13 +312,21 @@ breastcancer<-breastcancer %>%
   rename(CYCLE_NUMBER=CYCLE_NUMBER.x)
 
 breastcancer %>% 
-  filter(CYCLE_NUMBER>8) %>% 
+  filter(CYCLE_NUMBER>5) %>% 
   count(PSEUDONYMISED_PATIENTID) #n=284 patients with more than 8 cycles after correction
 
-breastcancer %>% 
-  filter(CYCLE_NUMBER>6) %>% 
-  select(PSEUDONYMISED_PATIENTID, DRUG_GROUP, ADMINISTRATION_DATE,CYCLE_NUMBER, DAYSFROMPREVIOUSADMIN)
+breastcancer %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  count(maxcycle)
 ```
+
+
+
+
+
+
 Clean column names changed by merging:
 ```{r}
 breastcancer<-breastcancer %>% 
@@ -379,6 +443,12 @@ regimens %>%
   ungroup() %>% 
   filter(REGIMEN=="ECT") %>%
   count(DRUG_GROUP)
+
+breastcancer %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  count(maxcycle)
 ```
 
 
@@ -443,6 +513,11 @@ breastcancer %>%
   distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
   count(REGIMEN) %>% 
   mutate(percentage=n*100/sum(n))
+breastcancer %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  count(maxcycle)
 ```
 
 
@@ -474,10 +549,23 @@ BMI_table<-breastcancer %>%
   distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
   ungroup()  #n=93.6%
 
+BMI_table %>% 
+  select(PSEUDONYMISED_PATIENTID,BMI, BSA,HEIGHT_AT_START_OF_REGIMEN, WEIGHT_AT_START_OF_REGIMEN, ADMINISTRATION_DATE)
+```
+Investigate capping of BSA as this may affect dose given:
+```{r}
+BMI_table
 ```
 
 
 ```{r}
+missingBMIflag<-BMI_table %>%
+  mutate(missing_BMI=ifelse(is.na(BMI),1,0)) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  fill(missing_BMI,.direction = "updown") %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  select(PSEUDONYMISED_PATIENTID, missing_BMI)
+
 imputationdata<-BMI_table %>% 
   distinct(PSEUDONYMISED_PATIENTID, .keep_all=T) %>% 
   select(PSEUDONYMISED_PATIENTID,CENTRE_TYPE, Commissioning.region, REGIMEN, ETHNICITYNAME, HISTOLOGY, TRASTUZUMAB_FLAG, QUINTILE_2015, AGE_AT_FIRST_TREATMENT, STAGE_BEST, CHRL_TOT_27_03, BMI,BSA, HEIGHT_AT_START_OF_REGIMEN, WEIGHT_AT_START_OF_REGIMEN)
@@ -496,7 +584,7 @@ breastcancer<-completedData %>%
   merge(breastcancer, by ="PSEUDONYMISED_PATIENTID")
 
 breastcancer %>% 
-  count(PSEUDONYMISED_PATIENTID) #n=14446
+  count(PSEUDONYMISED_PATIENTID) #n=14372
 
 breastcancer %>% 
 skimr::skim()
@@ -507,7 +595,7 @@ Exclude patients with diagnosis date after death date (data error)
 #n=4 excluded
 ```{r}
 breastcancer %>% 
-  count(PSEUDONYMISED_PATIENTID) #n=14446
+  count(PSEUDONYMISED_PATIENTID) #n=14372
 
 breastcancer<-table1 %>% 
   merge(table2, by = "PSEUDONYMISED_PATIENTID") %>% 
@@ -520,35 +608,43 @@ breastcancer<-table1 %>%
   filter(is.na(deathbeforediagnosis)) 
 
 breastcancer %>% 
-  count(PSEUDONYMISED_PATIENTID) #n=14442, 4 excluded
+  count(PSEUDONYMISED_PATIENTID) #n=14368, 4 excluded
 ```
-Filter patients with only one cycle:
+Filter patients with less than 8 cycles as this was not standard practice and is likely a data error:
+N=14368 before
+N=14114 after
+N=154 excluded with more than 9 cycles
 ```{r}
+breastcancer %>% 
+  count(PSEUDONYMISED_PATIENTID) #n-14368 patients 
+
 breastcancer<-breastcancer %>% 
   group_by(PSEUDONYMISED_PATIENTID) %>% 
   mutate(numbercycles=max(CYCLE_NUMBER))
 
 breastcancer<-breastcancer %>% 
-  filter(numbercycles>1)
+  filter(numbercycles<9)
 
 breastcancer %>% 
-  count(PSEUDONYMISED_PATIENTID) #n-14088 patients with more than 1 cycle
+  count(PSEUDONYMISED_PATIENTID) #n-14114 patients with more than 1 cycle
+
+breastcancer %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  count(maxcycle)
 ```
-Filter patients with more than 8 cycles as this may represent an error and was not standard practice:
-```{r}
-breastcancer %>% 
-  count(PSEUDONYMISED_PATIENTID) #n-14088 patients with more than 1 cycle
 
-breastcancer<-breastcancer %>% 
-  filter(numbercycles<9) 
-
-breastcancer %>% 
-  count(PSEUDONYMISED_PATIENTID) #n-13760 patients with more than 1 cycle
-```
 
 
 Then filter out treatments given after 64 days from last treatment - we do not consider this to be part of the same regimen:
 ```{r}
+breastcancer %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  count(maxcycle)
+
 breastcancer<-breastcancer %>% 
   arrange(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE) %>% 
   group_by(PSEUDONYMISED_PATIENTID) %>% 
@@ -558,8 +654,80 @@ breastcancer<-breastcancer %>%
   filter(is.na(flag))
 
 breastcancer %>%
-  count(PSEUDONYMISED_PATIENTID) #n=13,760, no patients excluded.
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  count(maxcycle)
+
+breastcancer %>%
+  ungroup() %>% 
+  count(PSEUDONYMISED_PATIENTID) #n=14,114 no patients excluded.
+
+investigation<- breastcancer
+
+investigation %>% 
+  select(PSEUDONYMISED_PATIENTID, REGIMEN,ADMINISTRATION_DATE, DRUG_GROUP, CYCLE_NUMBER, DAYSFROMPREVIOUSADMIN)
 ```
+
+Then insert a cycle if gap >29 days, or two cycles if gap >60 days between cycles. We assume missing cycles here not covered by the SACT dataset:
+```{r}
+breastcancer %>% 
+  arrange(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(flag=ifelse(DAYSFROMPREVIOUSADMIN>29,1,NA)) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  fill(flag,.direction="up") 
+
+breastcancer %>% 
+  arrange(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(flag=ifelse(DAYSFROMPREVIOUSADMIN>29,1,NA)) %>% 
+  filter(flag==1) %>% 
+  select(DAYSFROMPREVIOUSADMIN) %>% 
+  summary()
+
+
+updated_cycles<-breastcancer %>% 
+  arrange(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  distinct(PSEUDONYMISED_PATIENTID,ADMINISTRATION_DATE,.keep_all=T) %>% 
+  mutate(missing_cycle=if_else(DAYSFROMPREVIOUSADMIN>29&!is.na(DAYSFROMPREVIOUSADMIN), lag(ADMINISTRATION_DATE)+21,NA)) %>% 
+  select(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE, CYCLE_NUMBER, missing_cycle) %>% 
+  pivot_wider(names_from = CYCLE_NUMBER,names_prefix = "CYCLE", values_from = ADMINISTRATION_DATE) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  fill(everything(),.direction="updown") %>% 
+  pivot_longer(cols= missing_cycle:CYCLE8) %>% 
+  arrange(PSEUDONYMISED_PATIENTID, value) %>% 
+  filter(!is.na(value)) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  distinct(PSEUDONYMISED_PATIENTID, name,.keep_all=T) %>% 
+  mutate(row_number()) %>% 
+  mutate(CYCLE_updated=str_replace(row_number(), "1", "CYCLE1")) %>% 
+  mutate(CYCLE_updated=str_replace(CYCLE_updated, "2", "CYCLE2")) %>% 
+    mutate(CYCLE_updated=str_replace(CYCLE_updated, "3", "CYCLE3")) %>% 
+    mutate(CYCLE_updated=str_replace(CYCLE_updated, "4", "CYCLE4")) %>% 
+    mutate(CYCLE_updated=str_replace(CYCLE_updated, "5", "CYCLE5")) %>%
+    mutate(CYCLE_updated=str_replace(CYCLE_updated, "6", "CYCLE6")) %>% 
+  mutate(CYCLE_updated=str_replace(CYCLE_updated, "7", "CYCLE7")) %>% 
+  mutate(CYCLE_updated=str_replace(CYCLE_updated, "8", "CYCLE8"))%>% 
+  mutate(CYCLE_updated=str_replace(CYCLE_updated, "9", "CYCLE9"))%>% 
+  mutate(CYCLE_updated=str_replace(CYCLE_updated, "10", "CYCLE10"))%>% 
+  mutate(CYCLE_updated=str_replace(CYCLE_updated, "11", "CYCLE11"))%>% 
+  mutate(CYCLE_updated=str_replace(CYCLE_updated, "12", "CYCLE12")) %>% 
+  rename(ADMINISTRATION_DATE=value)
+```
+
+Then bind the updated cycles to the dataset:
+
+```{r}
+breastcancer<-breastcancer %>% 
+  ungroup() %>% 
+  select(-ADMINISTRATION_DATE) %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  left_join(updated_cycles, by = "PSEUDONYMISED_PATIENTID", "ADMINISTRATION_DATE")%>% 
+  distinct(PSEUDONYMISED_PATIENTID,CYCLE_updated,.keep_all=T)
+```
+
 Data exploration. Given differences in prescribing practice for EC-T/TC, it was necessary to explore prescribing patterns by regions and NHS organisations.
 Descriptives - count the number of cycles and plot by NHS organisation.
 ```{r}
@@ -613,6 +781,13 @@ descriptive %>%
 ```
 Check number of cycles for ECT only:
 ```{r}
+breastcancer %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  count(maxcycle)
+
 ECT_only<-descriptive %>% 
   filter(REGIMEN=="ECT")
 
@@ -646,7 +821,7 @@ ECTabove6<-countabove6 %>%
   mutate(percentage=n.x/n.y*100)
  
 ECTabove6plot<-ECTabove6 %>% 
- filter(percentage>25&n.x>2) %>% 
+ filter(percentage>0&n.x>2) %>% 
   mutate(percentage=percentage/100) %>% 
   mutate(percentage=round(percentage, 2))
 
@@ -691,13 +866,15 @@ ECT_8_cycles %>%
   rename(ORGANISATION_CODE_OF_PROVIDER=ORGANISATION_CODE_OF_PROVIDER.x) %>% 
   merge(breastcancer, by = "ORGANISATION_CODE_OF_PROVIDER") %>% 
   filter(REGIMEN=="ECT") %>% 
-  filter(percentage>0) %>% #n=4,422 patients treated at sites giving any patient ECTx8. This represents 70/174 sites in total
-  #filter(percentage>10) %>% #n=2,328 patients treated at sites giving more than 10% of patients ECTx8
+  #filter(percentage>0) %>% #n=4,422 patients treated at sites giving any patient ECTx8. This represents 70/174 sites in total
+  filter(percentage>10) %>% #n=2,328 patients treated at sites giving more than 10% of patients ECTx8
   #filter(percentage>25) %>% #n=1,174 patients treated at sites giving more than 25% of patients ECTx8
   count(ORGANISATION_CODE_OF_PROVIDER) #n=5129 ECT patients
 
 breastcancer %>% 
     count(ORGANISATION_CODE_OF_PROVIDER) 
+
+
 ```
 Count the number of sites who didn't give any ECTx8
 ```{r}
@@ -705,148 +882,211 @@ ECT_8_cycles %>%
   rename(ORGANISATION_CODE_OF_PROVIDER=ORGANISATION_CODE_OF_PROVIDER.x) %>% 
   merge(breastcancer, by = "ORGANISATION_CODE_OF_PROVIDER") %>% 
   filter(REGIMEN=="ECT") %>% 
-  filter(percentage<25) %>% 
+  #filter(percentage==0) %>% #n=794 patients who were treated at sites that only gave ECTx6
+  filter(percentage<10) %>% #n=4009/5128 patients who were treated at sites that only 25% of patients ECTx6
   #count(ORGANISATION_CODE_OF_PROVIDER) #n=59 sites of 129 (45% of sites)
   count(PSEUDONYMISED_PATIENTID) #n=794 patients who were treated at sites that only gave ECTx6
 ```
 
-Count numbers giving FECT x8
-```{r}
-#Count percentage of patients given ECTx8 at each site. 
-#We will look at 0%, 10% and 25% thresholds to exclude all patients treated at sites giving ECT8 at these rates
-FECTonly %>% 
-  rename(ORGANISATION_CODE_OF_PROVIDER=ORGANISATION_CODE_OF_PROVIDER.x) %>% 
-  merge(breastcancer, by = "ORGANISATION_CODE_OF_PROVIDER") %>% 
-  filter(REGIMEN=="FECT") %>% 
-  filter(percentage>0) %>% #n=4,422 patients treated at sites giving any patient ECTx8
- # filter(percentage>10) %>% #n=2,328 patients treated at sites giving more than 10% of patients ECTx8
-  #filter(percentage>25) %>% #n=1,174 patients treated at sites giving more than 25% of patients ECTx8
-  count(PSEUDONYMISED_PATIENTID) #n=5129 ECT patients
-```
 
-Plots of data for ECT:
+Plots of NHS sites where any patient was given ECTx8
 ```{r}
 #Bar plot of organisations giving more than 6
 ggbarplot(ECTabove6plot, x = "ORGANISATION_CODE_OF_PROVIDER.x", y = "percentage",
   label = TRUE, label.pos = "out", lab.size = 3)+
   theme(text = element_text(size = 6))
 
+ECT_by_site<-ECT_only %>% 
+  count(ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+  merge(ECT_only, by ="ORGANISATION_CODE_OF_PROVIDER.x") %>% 
+  ungroup() %>% 
+  mutate(percentage=ifelse(numbercycles>6,1,0)) %>% 
+  group_by(ORGANISATION_CODE_OF_PROVIDER.x) %>%
+  mutate(percentage=sum(percentage)) %>% 
+  mutate(total=sum(n)) %>% 
+  mutate(percentage=percentage/total*100)
+
+ECT_by_site %>% 
+  ungroup() %>% 
+  filter(percentage<25) %>% 
+  count(PSEUDONYMISED_PATIENTID)
+```
+
+
+```{r}
 #Caterpillar plot for ECT
 qplot(
-  data = ECT_numbercyclesmean, 
+  data = ECT_by_site, 
   x = ORGANISATION_CODE_OF_PROVIDER.x,       ## order groups
-  y = numbercyclesmean
+  y = percentage
 , 
   ymin=0,
-  ymax=6,
+  ymax=0,
   geom = c('errorbar', 'point'),
 ) +
+  ylim(0,10)+
+
 labs(
-  y = expression(bar(y)), x = 'Group',
-  title = 'Mean number of cycles of ECT by NHS site'
+  y = expression("Percentage of patients treated with ECTx8"), x = 'NHS site',
+  title = 'Percentage of patients who received ECTx8 by NHS site'
 ) 
+
+ECT_by_site%>% 
+  ungroup() %>% 
+  filter(percentage<5) %>% 
+  select(n, total, percentage,ORGANISATION_CODE_OF_PROVIDER.x,PSEUDONYMISED_PATIENTID) %>% 
+  count(ORGANISATION_CODE_OF_PROVIDER.x)
+  
+
 ```
 
 Check number of cycles for TC only:
 ```{r}
-TC_only<-descriptive %>% 
-  filter(REGIMEN=="TC")
-
-TC_only %>% 
-  count(PSEUDONYMISED_PATIENTID) #n=945
-
-TC_only %>% 
-  count(numbercycles) %>% 
-  mutate(percentage=n/sum(n)*100)
-
-ggplot(TC_only, aes(x = numbercycles, fill = Commissioning.region, colour = Commissioning.region)) + 
-  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(2:9), lim = c(0,8))
-
-TC_only %>% 
-  count(numbercycles) %>% 
-  mutate(percentage=n/sum(n)*100) %>% 
-  filter(percentage<25)
-  
-#Calculate average number of cycles by site
-TC_only_numbercycles<-TC_only %>% 
-   ungroup() %>%   count(ORGANISATION_CODE_OF_PROVIDER.x, numbercycles) %>%
-  group_by(ORGANISATION_CODE_OF_PROVIDER.x) %>% 
-  mutate(numbercyclesmean=mean(numbercycles)) %>% 
-  mutate(numbercyclesmean=round(numbercyclesmean, 2))
-
-TC_only_numbercycles_4cycles<-TC_only_numbercycles %>% 
-  filter(numbercyclesmean<4.001)
-
-TC_only_numbercycles_6cycles<-TC_only_numbercycles %>% 
-  filter(numbercyclesmean>4.001)
+#TC_only<-descriptive %>% 
+#  filter(REGIMEN=="TC")
+#
+#TC_only %>% 
+#  count(PSEUDONYMISED_PATIENTID) #n=945
+#
+#TC_only %>% 
+#
+#    mutate(percentage=n/sum(n)*100)
+#
+#ggplot(TC_only, aes(x = numbercycles, fill = Commissioning.region, colour = Commissioning.region)) + 
+#  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(2:9), lim = c(0,8))
+#
+#TC_only %>% 
+#  count(numbercycles) %>% 
+#  mutate(percentage=n/sum(n)*100) %>% 
+#  filter(percentage<25)
+#  
+##Calculate average number of cycles by site
+#TC_only_numbercycles<-TC_only %>% 
+#   ungroup() %>%   count(ORGANISATION_CODE_OF_PROVIDER.x, numbercycles) %>%
+#  group_by(ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+#  mutate(numbercyclesmean=mean(numbercycles)) %>% 
+#  mutate(numbercyclesmean=round(numbercyclesmean, 2))
+#
+#TC_only_numbercycles_4cycles<-TC_only_numbercycles %>% 
+#  filter(numbercyclesmean<4.001)
+#
+#TC_only_numbercycles_6cycles<-TC_only_numbercycles %>% 
+#  filter(numbercyclesmean>4.001)
 ```
 
 
 ```{r}
 #Bar plot of organisations giving 4 cycles of TC
-ggbarplot(TC_only_numbercycles_4cycles, x = "ORGANISATION_CODE_OF_PROVIDER.x", y = "numbercyclesmean",
-  label = TRUE, label.pos = "out", lab.size = 3)+
-  theme(text = element_text(size = 6))
-
-#Bar plot of organisations giving 4 cycles of TC
-ggbarplot(TC_only_numbercycles_6cycles, x = "ORGANISATION_CODE_OF_PROVIDER.x", y = "numbercyclesmean",
-  label = TRUE, label.pos = "out", lab.size = 3)+
-  theme(text = element_text(size = 6))
-
-#Caterpillar plot for TC:
-qplot(
-  data = TC_only_numbercycles, 
-  x = ORGANISATION_CODE_OF_PROVIDER.x,       ## order groups
-  y = numbercyclesmean
-, 
-  ymin=0,
-  ymax=4,
-  geom = c('errorbar', 'point'),
-) +
-labs(
-  y = expression(bar(y)), x = 'Group',
-  title = 'Mean number of cycles of TC by NHS site'
-) 
-
-#Caterpillar plot for TC:
-qplot(
-  data = TC_only_numbercycles, 
-  x = ORGANISATION_CODE_OF_PROVIDER.x,       ## order groups
-  y = numbercyclesmean
-, 
-  ymin=0,
-  ymax=4,
-  geom = c('errorbar', 'point'),
-) +
-labs(
-  y = expression(bar(y)), x = 'Group',
-  title = 'Mean number of cycles of TC by NHS site'
-) 
-
+#ggbarplot(TC_only_numbercycles_4cycles, x = "ORGANISATION_CODE_OF_PROVIDER.x", y = "numbercyclesmean",
+#  label = TRUE, label.pos = "out", lab.size = 3)+
+#  theme(text = element_text(size = 6))
+#
+##Bar plot of organisations giving 4 cycles of TC
+#ggbarplot(TC_only_numbercycles_6cycles, x = "ORGANISATION_CODE_OF_PROVIDER.x", y = "numbercyclesmean",
+#  label = TRUE, label.pos = "out", lab.size = 3)+
+#  theme(text = element_text(size = 6))
+#
+##Caterpillar plot for TC:
+#qplot(
+#  data = TC_only_numbercycles, 
+#  x = ORGANISATION_CODE_OF_PROVIDER.x,       ## order groups
+#  y = numbercyclesmean
+#, 
+#  ymin=0,
+#  ymax=4,
+#  geom = c('errorbar', 'point'),
+#) +
+#labs(
+#  y = expression(bar(y)), x = 'Group',
+#  title = 'Mean number of cycles of TC by NHS site'
+#) 
+#
+##Caterpillar plot for TC:
+##Calculate percentage of patients given TCx4
+#TC_by_site<-TC_only_numbercycles %>% 
+#  group_by(ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+#  mutate(percentage=ifelse(numbercycles<5,1,0)) %>% 
+#  mutate(percentage=sum(percentage)) %>% 
+#  mutate(total=sum(n)) %>% 
+#  mutate(percentage=percentage/total*100)
+#
+#qplot(
+#  data = TC_by_site, 
+#  x = ORGANISATION_CODE_OF_PROVIDER.x,       ## order groups
+#  y = percentage
+#, 
+#  ymin=0,
+#  ymax=25,
+#  geom = c('errorbar', 'point'),
+#) +
+#labs(
+#  y = expression(bar(y)), x = 'Group',
+#  title = 'Mean number of cycles of TC by NHS site'
+#) 
+#
+#
+#ggbarplot(ECTabove6plot, x = "ORGANISATION_CODE_OF_PROVIDER.x", y = "percentage",
+#  label = TRUE, label.pos = "out", lab.size = 3)+
+#  theme(text = element_text(size = 6))
+#
+##Caterpillar plot for ECT
+#TC_only_numbercycles 
+#qplot(
+#  data = TC_by_site, 
+#  x = ORGANISATION_CODE_OF_PROVIDER.x,       ## order groups
+#  y = percentage
+#, 
+#  ymin=0,
+#  ymax=25,
+#  geom = c('errorbar', 'point'),
+#) +
+#labs(
+#  y = expression("Percentage of patients treated with TCx4"), x = 'NHS site',
+#  title = 'TC prescribing by NHS site'
+#) 
+#
+#TC_by_site %>% 
+#  ungroup() %>% 
+#  #filter(percentage==100) %>% 
+#  count(ORGANISATION_CODE_OF_PROVIDER.x)
 ```
 
 Check number of cycles for EC only:
 ```{r}
-EConly<-descriptive %>% 
-  filter(REGIMEN=="EC")
-ggplot(EConly, aes(x = numbercycles, fill = REGIMEN, colour = Commissioning.region)) + 
-  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(2:9), lim = c(0,8))
-
-EConly %>% 
-  count(numbercycles) %>% 
-  mutate(percentage=n/sum(n)*100)
+#EConly<-descriptive %>% 
+#  filter(REGIMEN=="EC")
+#ggplot(EConly, aes(x = numbercycles, fill = REGIMEN, colour = Commissioning.region)) + 
+#  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(2:9), lim = c(0,8))
+#
+#EConly %>% 
+#  count(numbercycles) %>% 
+#  mutate(percentage=n/sum(n)*100)
 ```
 Check number of cycles for FECT only:
 ```{r}
-FECTonly<-descriptive %>% 
-  filter(REGIMEN=="FECT")
-ggplot(FECTonly, aes(x = numbercycles, fill = REGIMEN, colour = Commissioning.region)) + 
-  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(2:9), lim = c(0,8))
-
-FECTonly %>% 
-  count(numbercycles) %>% 
-  mutate(percentage=n/sum(n)*100)
+#FECTonly<-descriptive %>% 
+#  filter(REGIMEN=="FECT")
+#ggplot(FECTonly, aes(x = numbercycles, fill = REGIMEN, colour = Commissioning.region)) + 
+#  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(2:9), lim = c(0,8))
+#
+#FECTonly %>% 
+#  count(numbercycles) %>% 
+#  mutate(percentage=n/sum(n)*100)
 ```
+Count numbers giving FECT x8
+```{r}
+#Count percentage of patients given ECTx8 at each site. 
+#We will look at 0%, 10% and 25% thresholds to exclude all patients treated at sites giving ECT8 at these rates
+#FECTonly %>% 
+#  rename(ORGANISATION_CODE_OF_PROVIDER=ORGANISATION_CODE_OF_PROVIDER.x) %>% 
+#  merge(breastcancer, by = "ORGANISATION_CODE_OF_PROVIDER") %>% 
+#  filter(REGIMEN=="FECT") %>% 
+#  filter(percentage>0) %>% #n=4,422 patients treated at sites giving any patient ECTx8
+# # filter(percentage>10) %>% #n=2,328 patients treated at sites giving more than 10% of patients ECTx8
+#  #filter(percentage>25) %>% #n=1,174 patients treated at sites giving more than 25% of patients ECTx8
+#  count(PSEUDONYMISED_PATIENTID) #n=5129 ECT patients
+```
+
 Link centre type:
 ```{r}
 breastcancer<- trust_codes %>% 
@@ -856,6 +1096,25 @@ breastcancer<- trust_codes %>%
   select(CENTRE_TYPE, Commissioning.region,ORGANISATION_CODE_OF_PROVIDER) %>% 
   right_join(breastcancer, by = "ORGANISATION_CODE_OF_PROVIDER") 
 ```
+
+
+Exclude patients treated with TC:
+```{r}
+breastcancer %>% 
+  count(PSEUDONYMISED_PATIENTID) 
+
+breastcancer<-breastcancer %>% 
+  filter(REGIMEN!="TC") %>% 
+  filter(REGIMEN!="FEC") 
+
+breastcancer %>% 
+  count(PSEUDONYMISED_PATIENTID) #n=12809
+
+breastcancer %>% 
+  ungroup() %>% 
+  count(numbercycles)
+```
+
 
 ##########################################
 ##########################################
@@ -879,16 +1138,44 @@ doses<-table4 %>%
   merge(patient_list,by="PSEUDONYMISED_PATIENTID")
 
 doses_grouped<-doses %>% 
+  #rename(ADMINISTRATION_DATE=ADMINISTRATION_DATE.x) %>% 
   merge(breastcancer, by=c("PSEUDONYMISED_PATIENTID","DRUG_GROUP", "ADMINISTRATION_DATE")) %>% 
   distinct(PSEUDONYMISED_PATIENTID, DRUG_GROUP, ADMINISTRATION_DATE,.keep_all=T) %>% 
   group_by(PSEUDONYMISED_PATIENTID,DRUG_GROUP) %>% 
   mutate(cumulative_dose=sum(ACTUAL_DOSE_PER_ADMINISTRATION)) %>% 
-  distinct(PSEUDONYMISED_PATIENTID, DRUG_GROUP, cumulative_dose,REGIMEN)
+  distinct(PSEUDONYMISED_PATIENTID, DRUG_GROUP,ADMINISTRATION_DATE, cumulative_dose,REGIMEN,.keep_all=T) %>% 
+  select(PSEUDONYMISED_PATIENTID, DRUG_GROUP, cumulative_dose,REGIMEN, ADMINISTRATION_DATE, ACTUAL_DOSE_PER_ADMINISTRATION)
+#Create table for investigation into BSA and whether patients were capped at 2m^2
+doseinvestigation<-doses %>% 
+  #rename(ADMINISTRATION_DATE=ADMINISTRATION_DATE.x) %>% 
+  merge(breastcancer, by=c("PSEUDONYMISED_PATIENTID","DRUG_GROUP", "ADMINISTRATION_DATE")) %>% 
+  distinct(PSEUDONYMISED_PATIENTID, DRUG_GROUP, ADMINISTRATION_DATE,.keep_all=T) %>% 
+  group_by(PSEUDONYMISED_PATIENTID,DRUG_GROUP) %>% 
+  mutate(cumulative_dose=sum(ACTUAL_DOSE_PER_ADMINISTRATION)) %>% 
+  distinct(PSEUDONYMISED_PATIENTID, DRUG_GROUP,ADMINISTRATION_DATE, cumulative_dose,REGIMEN,.keep_all=T) %>% 
+  select(PSEUDONYMISED_PATIENTID, DRUG_GROUP,ADMINISTRATION_DATE, cumulative_dose,REGIMEN, ADMINISTRATION_DATE)
+
+
+doses<-doses %>%
+  merge(breastcancer, by=c("PSEUDONYMISED_PATIENTID","DRUG_GROUP", "ADMINISTRATION_DATE")) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(cumulativedose_epirubicin=ifelse(DRUG_GROUP=="EPIRUBICIN",cumsum(ACTUAL_DOSE_PER_ADMINISTRATION),NA))%>% 
+  mutate(cumulativedose_docetaxel=ifelse(DRUG_GROUP=="DOCETAXEL",cumsum(ACTUAL_DOSE_PER_ADMINISTRATION),NA))%>% 
+  mutate(cumulativedose_cyclo=ifelse(DRUG_GROUP=="CYCLOPHOSPHAMIDE",cumsum(ACTUAL_DOSE_PER_ADMINISTRATION),NA))%>% 
+  mutate(cumulativedose_FU=ifelse(DRUG_GROUP=="FLUOROURACIL",cumsum(ACTUAL_DOSE_PER_ADMINISTRATION),NA))%>% 
+  fill(c(cumulativedose_epirubicin,cumulativedose_docetaxel,cumulativedose_cyclo,cumulativedose_FU),.direction="down") %>% 
+  mutate(cumulativedose_FU=ifelse(is.na(cumulativedose_FU),0,cumulativedose_FU)) %>% 
+  mutate(cumulativedose_epirubicin=ifelse(is.na(cumulativedose_epirubicin),0,cumulativedose_epirubicin)) %>% 
+  mutate(cumulativedose_docetaxel=ifelse(is.na(cumulativedose_docetaxel),0,cumulativedose_docetaxel)) %>% 
+  mutate(cumulativedose_cyclo=ifelse(is.na(cumulativedose_cyclo),0,cumulativedose_cyclo)) %>% 
+  select(1,3, cumulativedose_epirubicin:cumulativedose_FU)
+
 ```
 
 2: Calculate time on treatment:
 ```{r}
 time_on_treatment<-doses %>%
+  #rename(ADMINISTRATION_DATE=ADMINISTRATION_DATE.x) %>% 
   group_by(PSEUDONYMISED_PATIENTID) %>% 
   mutate(timeontreatment=as.numeric(difftime(max(ADMINISTRATION_DATE), min(ADMINISTRATION_DATE))+21, units = "days")) %>% 
   select(PSEUDONYMISED_PATIENTID,timeontreatment) %>% 
@@ -948,14 +1235,32 @@ The time since treatment initiation (i.e. the interval number 0-60)
 ```{r}
 breastcancer<-breastcancer %>% 
   distinct(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE,.keep_all=T) %>% 
-  select(-ORGANISATION_CODE_OF_PROVIDER, -DRUG_GROUP, -surgerytochemotime,-ETHNICITY,-HEIGHT_AT_START_OF_REGIMEN, -WEIGHT_AT_START_OF_REGIMEN) 
+  select(-DRUG_GROUP, -ETHNICITY,-HEIGHT_AT_START_OF_REGIMEN, -WEIGHT_AT_START_OF_REGIMEN) 
 
-pivottable<-breastcancer %>% 
+pivottable<-breastcancer %>%
+  mutate(CYCLE_NUMBER=CYCLE_updated) %>% 
+    distinct(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE,.keep_all=T) %>% 
   select(PSEUDONYMISED_PATIENTID,CYCLE_NUMBER, ADMINISTRATION_DATE, numbercycles) %>% 
   arrange(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE)
 
-pivottable %>% 
-  filter(PSEUDONYMISED_PATIENTID=="P000383")
+BSA<-cumulative_dose_table %>% 
+  select(PSEUDONYMISED_PATIENTID, BSA)
+
+cumulativedosefinal<-pivottable %>% 
+  merge(doses,by=c("PSEUDONYMISED_PATIENTID", "ADMINISTRATION_DATE")) %>% 
+  merge(BSA, by = "PSEUDONYMISED_PATIENTID") %>% 
+  mutate(cumulativedose_epirubicin=cumulativedose_epirubicin/BSA) %>% 
+  mutate(cumulativedose_docetaxel=cumulativedose_docetaxel/BSA) %>% 
+  mutate(cumulativedose_cyclo=cumulativedose_cyclo/BSA) %>% 
+  mutate(cumulativedose_FU=cumulativedose_FU/BSA)
+
+
+breastcancer %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(CYCLE_NUMBER)) %>% 
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  count(maxcycle)
 ```
 
 Read in interval table 
@@ -967,7 +1272,7 @@ Pivot wider to get treatment dates and cycle numbers in wide format.
 ```{r}
 pivottable<-pivottable %>% 
   ungroup() %>% 
-  pivot_wider(names_from = CYCLE_NUMBER,names_prefix = "CYCLE", values_from = ADMINISTRATION_DATE)
+  pivot_wider(names_from = CYCLE_NUMBER, values_from = ADMINISTRATION_DATE)
 ```
 Create an intervals table and bind to the dataset
 ```{r}
@@ -980,11 +1285,15 @@ interval[,]=matrix(ncol=ncol(interval), rep(NA, prod(dim(interval))))
 
 Set the index date as start of chemotherapy for interval 0:
 ```{r}
+
 pivottable<-pivottable %>% 
   cross_join(interval)
 
+#pivottable<-pivottable %>% 
+#  mutate(interval0= CYCLE1+30)
+
 pivottable<-pivottable %>% 
-  mutate(interval0= CYCLE1+30)
+  mutate(interval0= CYCLE1)
 ```
 Create a recursive function to define the interval periods for each patient to cover the 5 year follow up period:
 Then define the period for each interval for each patient
@@ -1033,7 +1342,6 @@ pivottable<-pivottable %>%
   mutate(interval39=as.Date(interval38+30)) %>% 
   mutate(interval40=as.Date(interval39+30)) %>% 
   mutate(interval41=as.Date(interval40+30)) %>% 
-  
   mutate(interval42=as.Date(interval41+30)) %>% 
   mutate(interval43=as.Date(interval42+30)) %>% 
   mutate(interval44=as.Date(interval43+30)) %>% 
@@ -1042,9 +1350,7 @@ pivottable<-pivottable %>%
   mutate(interval47=as.Date(interval46+30)) %>% 
   mutate(interval48=as.Date(interval47+30)) %>% 
   mutate(interval49=as.Date(interval48+30)) %>% 
-  
-  
-    mutate(interval50=as.Date(interval49+30)) %>% 
+  mutate(interval50=as.Date(interval49+30)) %>% 
   mutate(interval51=as.Date(interval50+30)) %>% 
   mutate(interval52=as.Date(interval51+30)) %>% 
   mutate(interval53=as.Date(interval52+30)) %>% 
@@ -1152,18 +1458,26 @@ intervalstable<-breastcancer2 %>%
   ungroup()
   
  treatments<- breastcancer2 %>% 
-    select(PSEUDONYMISED_PATIENTID,CYCLE1:CYCLE11) %>% 
+    select(PSEUDONYMISED_PATIENTID,CYCLE1:CYCLE8) %>% 
     group_by(PSEUDONYMISED_PATIENTID) %>% 
-  pivot_longer(cols= CYCLE1:CYCLE11) %>% 
+  pivot_longer(cols= CYCLE1:CYCLE8) %>% 
    ungroup()
-    
+ 
+ breastcancer2 %>% 
+ count(numbercycles)
+ 
+ treatments %>% group_by(name)  
+```
+
+
+```{r}
 intervaltreatmentstable<-treatments %>%
   group_by(PSEUDONYMISED_PATIENTID) %>% 
   distinct(PSEUDONYMISED_PATIENTID,value,.keep_all=T) %>% 
   filter(!is.na(value)) %>% 
-    right_join(intervalstable, by = "PSEUDONYMISED_PATIENTID") %>% 
+  right_join(intervalstable, by = "PSEUDONYMISED_PATIENTID") %>% 
     #filter(name.x!="CYCLE1"&name.y!="interval0") %>% 
-    filter(value.x<=value.y&value.x>=lag(value.y)) %>% 
+    filter(value.x<=value.y&value.x>=lag(value.y)) %>%  #This line is causing problems by excluding patients
     group_by(PSEUDONYMISED_PATIENTID) %>% 
     mutate(intervalcycle=name.x) %>% 
     mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE1",1,NA)) %>% 
@@ -1171,23 +1485,38 @@ intervaltreatmentstable<-treatments %>%
     mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE3",3,intervalcycle2)) %>% 
     mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE4",4,intervalcycle2)) %>% 
     mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE5",5,intervalcycle2)) %>% 
-    mutate(intervalcycle2=ifelse(str_detect(intervalcycle,"CYCLE6|CYCLE7|CYCLE8|CYCLE9|CYCLE10|CYCLE11|CYCLE12"),6,intervalcycle2)) %>% 
+    mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE6",6,intervalcycle2)) %>% 
+    mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE7",7,intervalcycle2)) %>% 
+    mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE8",8,intervalcycle2)) %>% 
+    mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE9",9,intervalcycle2)) %>% 
+    mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE10",10,intervalcycle2)) %>% 
+    mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE11",11,intervalcycle2)) %>% 
   ungroup() %>% 
     arrange(PSEUDONYMISED_PATIENTID, intervalcycle, intervalcycle2) %>% 
     select(PSEUDONYMISED_PATIENTID, name.y, intervalcycle2) %>% 
     rename(interval=name.y) %>% 
     rename(numbercycles=intervalcycle2)
 
+intervaltreatmentstable %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numbercycles)) %>% 
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  count(maxcycle)
+```
+
+
+```{r}
 #There are some nonconforming patients who get filtered out by this rule:
 
 corrected<-intervaltreatmentstable %>% 
   merge(treatments, by = "PSEUDONYMISED_PATIENTID") %>% 
   group_by(PSEUDONYMISED_PATIENTID) %>% 
   distinct(PSEUDONYMISED_PATIENTID,value,.keep_all=T) %>% 
-  filter(!is.na(value)) %>% 
+  #filter(!is.na(value)) %>% 
   arrange(PSEUDONYMISED_PATIENTID,value) %>% 
   right_join(intervalstable, by = "PSEUDONYMISED_PATIENTID") %>% 
-    filter(value.x<=value.y&value.x<lead(value.y)) %>% 
+  filter(value.x<=value.y&value.x<lead(value.y)) %>% 
   distinct(value.x,.keep_all=T) %>% 
   group_by(PSEUDONYMISED_PATIENTID) %>% 
     mutate(intervalcycle=name.x) %>% 
@@ -1196,29 +1525,59 @@ corrected<-intervaltreatmentstable %>%
     mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE3",3,intervalcycle2)) %>% 
     mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE4",4,intervalcycle2)) %>% 
     mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE5",5,intervalcycle2)) %>% 
-    mutate(intervalcycle2=ifelse(str_detect(intervalcycle,"CYCLE6|CYCLE7|CYCLE8|CYCLE9|CYCLE10|CYCLE11|CYCLE12"),6,intervalcycle2)) %>% 
+    mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE6",6,intervalcycle2)) %>% 
+    mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE7",7,intervalcycle2)) %>% 
+      mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE8",8,intervalcycle2)) %>% 
+      mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE9",9,intervalcycle2)) %>% 
+      mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE10",10,intervalcycle2)) %>% 
+      mutate(intervalcycle2=ifelse(intervalcycle=="CYCLE11",11,intervalcycle2)) %>% 
   ungroup() %>% 
     arrange(PSEUDONYMISED_PATIENTID, intervalcycle, intervalcycle2) %>% 
     select(PSEUDONYMISED_PATIENTID, name.y, intervalcycle2) %>% 
     rename(interval=name.y) %>% 
     rename(numbercycles=intervalcycle2)
+
+corrected %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numbercycles)) %>% 
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  count(maxcycle)  #Correct here
+
+corrected %>% 
+  filter(PSEUDONYMISED_PATIENTID=="P000273")
 ```
 
 Then fill intervals based on cycle number at first date of interval.
 ```{r}
-intervaltreamentstable2<-intervaltreatmentstable %>% 
+intervaltreamentstable2<-corrected %>% 
   ungroup() %>% 
   arrange(PSEUDONYMISED_PATIENTID, numbercycles, desc(interval)) %>% 
   distinct(PSEUDONYMISED_PATIENTID,numbercycles,interval,.keep_all=T) %>% 
   group_by(PSEUDONYMISED_PATIENTID) %>% 
-  mutate(row = row_number()) %>% 
-  pivot_wider(names_from = interval, values_from = numbercycles) %>% 
-  select(-row) %>% 
-  mutate(interval0=1) %>% 
-  select(PSEUDONYMISED_PATIENTID, interval0, interval1:interval6,interval7,interval8, interval9, interval10) %>% 
-  fill("interval0":"interval10", .direction = "updown") %>% 
+  mutate(row = row_number()) 
+
+intervaltreamentstable2 %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numbercycles)) %>% 
+  ungroup() %>% 
   distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
-  mutate(interval1=ifelse(is.na(interval1), interval2, interval1)) %>% 
+  count(maxcycle)
+
+intervaltreamentstable2<-intervaltreamentstable2 %>%
+  arrange(PSEUDONYMISED_PATIENTID,interval, desc(numbercycles)) %>% 
+  distinct(PSEUDONYMISED_PATIENTID, interval,.keep_all=T) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  pivot_wider(names_from = interval, values_from = numbercycles) %>% 
+  fill("interval0":"interval41", .direction = "updown") %>% 
+  select(-row) %>%
+  #mutate(interval0=1) %>% 
+  select(PSEUDONYMISED_PATIENTID, interval0, interval1, interval2, interval3, interval4, interval5, interval6,interval7,interval8, interval9, interval10, interval11) %>% 
+  fill(everything(), .direction = "updown") 
+
+  intervaltreamentstable2<-intervaltreamentstable2 %>%
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  mutate(interval1=ifelse(is.na(interval1), interval0, interval1)) %>% 
   mutate(interval2=ifelse(is.na(interval2), interval1, interval2)) %>% 
   mutate(interval3=ifelse(is.na(interval3), interval2, interval3)) %>% 
   mutate(interval4=ifelse(is.na(interval4), interval3, interval4)) %>% 
@@ -1227,61 +1586,63 @@ intervaltreamentstable2<-intervaltreatmentstable %>%
   mutate(interval7=ifelse(is.na(interval7), interval6, interval7)) %>% 
   mutate(interval8=ifelse(is.na(interval8), interval7, interval8)) %>% 
   mutate(interval9=ifelse(is.na(interval9), interval8, interval9)) %>% 
-  mutate(interval10=ifelse(is.na(interval10), interval9, interval9)) 
+  mutate(interval10=ifelse(is.na(interval10), interval9, interval10))
+  
+  intervaltreamentstable2 %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>%
+  ungroup() %>% 
+  count(interval10)
+```
 
-intervaltreatmentstable %>% 
-  filter(PSEUDONYMISED_PATIENTID=="P000383")
 
+```{r}
 corrected2<-corrected %>% 
   ungroup() %>% 
   arrange(PSEUDONYMISED_PATIENTID, numbercycles, desc(interval)) %>% 
   distinct(PSEUDONYMISED_PATIENTID,numbercycles,interval,.keep_all=T) %>% 
   group_by(PSEUDONYMISED_PATIENTID) %>% 
   mutate(row = row_number()) %>% 
-  arrange(PSEUDONYMISED_PATIENTID, interval, desc(numbercycles)) %>% 
-  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T)
+  arrange(PSEUDONYMISED_PATIENTID, interval, desc(numbercycles))
   
+
+corrected %>% 
+  filter(PSEUDONYMISED_PATIENTID=="P000273")
 ```
 
 Make a table with discontinuation interval for each patient:
 ```{r}
-discontinuationtable<-intervaltreamentstable2 %>% 
-  pivot_longer(cols= interval0:interval8) %>% 
-  group_by(PSEUDONYMISED_PATIENTID) %>% 
-  arrange(PSEUDONYMISED_PATIENTID,desc(value), name) %>% 
-  distinct(PSEUDONYMISED_PATIENTID, .keep_all=T) %>% 
+discontinuationtable<-intervaltreamentstable2 %>%
+  select(-interval11) %>% 
+  pivot_longer(cols= interval0:interval10) %>% 
   mutate(discontinuationcycle=name) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "1"),1,NA)) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "2"),2,discontinuationcycle2)) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "3"),3,discontinuationcycle2)) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "4"),4,discontinuationcycle2)) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "5"),5,discontinuationcycle2)) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "6"),6,discontinuationcycle2)) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "7"),7,discontinuationcycle2)) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "8"),8,discontinuationcycle2)) %>% 
-  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "9"),9,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval1"),1,NA)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval2"),2,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval3"),3,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval4"),4,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval5"),5,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval6"),6,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval7"),7,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval8"),8,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval9"),9,discontinuationcycle2)) %>% 
+  mutate(discontinuationcycle2=ifelse(str_detect(discontinuationcycle, "interval10"),10,discontinuationcycle2)) %>% 
   select(-discontinuationcycle) %>% 
   rename(discontinuationcycle=discontinuationcycle2) %>% 
   rename(numberofcyclestotal=value) %>% 
-  select(-name)
+  select(-name) %>% 
+  mutate(discontinuationcycle=max(numberofcyclestotal))
 
-corrected3<-corrected2%>% 
-  
-  group_by(PSEUDONYMISED_PATIENTID) %>% 
-
-  mutate(discontinuationcycle=2) %>% 
- 
- 
-  rename(numberofcyclestotal=2) %>% 
-  select(-row)
-
+discontinuationtable %>% 
+  ungroup() %>% 
+  count(discontinuationcycle)
 ```
 Then link it all together:
 ```{r}
 link1<-
 discontinuationtable %>% 
-  merge(intervaltreamentstable2, by ="PSEUDONYMISED_PATIENTID") %>% 
-  mutate(interval0=1)
+  mutate(discontinuationcycle=numberofcyclestotal) %>% 
+  merge(intervaltreamentstable2, by ="PSEUDONYMISED_PATIENTID") #%>% 
+  #mutate(interval0=1)
+
 
 intervalstable<-breastcancer2 %>% 
   pivot_longer(cols = interval0:interval60) %>% 
@@ -1294,11 +1655,6 @@ select(PSEUDONYMISED_PATIENTID,VITALSTATUSDATE, VITALSTATUSDATE, name, value)
     rename(death=name) %>% 
     rename(marker=value) %>% 
 select(PSEUDONYMISED_PATIENTID, death, marker)
- 
- 
- corrected3 %>% 
-   merge(intervaltreatmentstable, by ="PSEUDONYMISED_PATIENTID") %>% 
-  mutate(interval0=1)
 ```
 
 
@@ -1321,9 +1677,12 @@ intervaltable2<-intervalstable %>%
 Now need to amend so that we have the interval the patient discontinues at and the number of cycles at each interval
 ```{r}
 finalCCWtable<-link1 %>% 
-    pivot_longer(cols = interval0:interval8) %>% 
+  pivot_longer(cols = interval0:interval10) %>% 
   rename(interval=name) %>% 
+  distinct(PSEUDONYMISED_PATIENTID,interval,.keep_all=T) %>% 
   right_join(intervaltable2, by = c("PSEUDONYMISED_PATIENTID","interval")) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(numberofcyclestotal=max(value, na.rm=TRUE)) %>% 
   mutate(discontinuation=ifelse(numberofcyclestotal==value,1,0)) %>% 
   select(-discontinuationcycle) %>% 
   rename(numberofcycles=value) %>% 
@@ -1332,44 +1691,41 @@ select(PSEUDONYMISED_PATIENTID, interval, numberofcycles, survivalmarker, discon
   group_by(PSEUDONYMISED_PATIENTID) %>% 
   fill(numberofcycles,.direction = "down") %>% 
     fill(discontinuation,.direction = "down")
+```
+
+
+```{r}
+finalCCWtable %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>%
+    distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+
+  ungroup() %>% 
+  count(maxcycle)
 
 finalCCWtable<-breastcancer2 %>% 
   distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
   select(PSEUDONYMISED_PATIENTID, VITALSTATUS, VITALSTATUSDATE) %>% 
  merge(finalCCWtable, by = "PSEUDONYMISED_PATIENTID")
-
-finalCCWtable %>% count(PSEUDONYMISED_PATIENTID)
 ```
 
-Adjustment needed for those receiving 2 cycles as the code didnt work:
-This was investigated and all patients received 2 cycles within the first interval, therefore set interval 0 to 1 cycle and interval 1 to 2.
-```{r}
-correctionlist<-finalCCWtable %>% 
-  filter(is.na(discontinuation))  %>% 
-  distinct(PSEUDONYMISED_PATIENTID)
 
-
-finalCCWtable %>% 
-  ungroup() %>% 
-  skimr::skim()
-
-finalCCWtable<-finalCCWtable %>% 
-    ungroup() %>% 
-  mutate(numberofcycles=ifelse(is.na(numberofcycles)&interval=="interval0",1,numberofcycles)) %>% 
-    mutate(numberofcycles=ifelse(is.na(numberofcycles)&interval=="interval1",2,numberofcycles))%>% 
-  group_by(PSEUDONYMISED_PATIENTID) %>% 
-  fill(numberofcycles,.direction = "updown") %>% 
- mutate(discontinuation=ifelse(is.na(discontinuation)&numberofcycles==1,0,discontinuation)) %>% 
-           mutate(discontinuation=ifelse(is.na(discontinuation)&numberofcycles==2,1,discontinuation))%>% 
-  
-
-  ungroup()
-```
-
-Then finally remove the 1 patient with no follow up date:
+Then finally remove the 2 patients with no follow up date:
 ```{r}
 finalCCWtable<-finalCCWtable %>% 
   filter(!is.na(VITALSTATUSDATE)) 
+
+finalCCWtable %>% 
+  count(PSEUDONYMISED_PATIENTID) #n=12807 - 2 excluded 
+
+hist(finalCCWtable$numberofcycles)
+
+finalCCWtable %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>%
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+count(maxcycle)
 ```
 
 
@@ -1384,33 +1740,16 @@ dataset<-breastcancer %>%
   rename(CENTRE_TYPE=CENTRE_TYPE.x) %>% 
   ungroup() %>% 
   distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
-  right_join(finalCCWtable, by ="PSEUDONYMISED_PATIENTID")
-```
-
-
-
-
-
-
-
-```{r}
-#dataset %>% 
-#write_csv("breastCCWdataset.csv")
+  merge(finalCCWtable, by ="PSEUDONYMISED_PATIENTID")
 
 dataset %>% 
-  arrange(PSEUDONYMISED_PATIENTID, interval) %>% 
-  group_by(PSEUDONYMISED_PATIENTID) %>% 
-  fill(survivalmarker,.direction = "updown") %>% 
-  fill(discontinuation,.direction = "updown") %>% 
- ungroup() %>% 
-  skimr::skim()
-
-dataset %>%distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>%  ungroup() %>% 
-  skimr::skim()
-
-dataset %>% 
-  count(PSEUDONYMISED_PATIENTID)
+group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>%
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+count(maxcycle)
 ```
+
 
 Rejoin surgery setting
 ```{r}
@@ -1418,27 +1757,272 @@ dataset<-surgery_coded %>%
   merge(dataset, by = "PSEUDONYMISED_PATIENTID")
 ```
 
+
+
+
+```{r}
+dataset<-dataset %>% 
+  select(PSEUDONYMISED_PATIENTID, interval, survivalmarker, discontinuation, numberofcycles,surgery_setting, BMI, REGIMEN, Commissioning.region, CENTRE_TYPE, ETHNICITYNAME, HISTOLOGY, AGE_AT_FIRST_TREATMENT, TRASTUZUMAB_FLAG, CHRL_TOT_27_03, STAGE_BEST, QUINTILE_2015) %>% 
+  mutate(intervalnew=as.numeric(str_replace_all(interval,"interval"," "))) %>% 
+  arrange(PSEUDONYMISED_PATIENTID, intervalnew) %>% 
+  select(-intervalnew)
+
+dataset %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  ungroup() %>% 
+  count(maxcycle)
+
+dataset %>% 
+  filter(PSEUDONYMISED_PATIENTID=="P000273")
+```
+Correct discontinuation
+```{r}
+dataset<-dataset %>%
+  mutate(discontinuation=NA) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>% 
+  mutate(discontinuation=ifelse(numberofcycles==maxcycle,1,0))
+```
+
+Correct columns where markers switch from yes to no:
+```{r}
+dataset<-dataset %>% 
+  ungroup() %>% 
+  mutate(survivalmarker=ifelse(survivalmarker==0, NA, survivalmarker)) %>%
+    mutate(discontinuation=ifelse(discontinuation==1, NA, discontinuation)) %>% 
+
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  fill(survivalmarker,.direction = "up") %>% 
+  mutate(survivalmarker=ifelse(is.na(survivalmarker),0,survivalmarker)) %>%
+    mutate(discontinuation=ifelse(is.na(discontinuation),1,discontinuation)) %>% 
+
+  ungroup()
+```
+
+
+
+
+Diagnostics to check code has been corrected:
+```{r}
+#Filtered for where survival goes from yes to no, then distinct lines. No change in number of lines therefore no patients have more than 1 instance of changing
+dataset %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  filter(survivalmarker==1&lead(survivalmarker)==0) %>% 
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID) 
+
+
+dataset %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  filter(discontinuation==0&lead(discontinuation)==1) %>% 
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID) 
+
+dataset %>% 
+  count(PSEUDONYMISED_PATIENTID)
+
+dataset %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  filter(discontinuation==0&lead(discontinuation)==1) %>% 
+  ungroup() %>% 
+  mutate(correct=1) %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  select(PSEUDONYMISED_PATIENTID, correct) %>% 
+  right_join(dataset, by = "PSEUDONYMISED_PATIENTID") %>% 
+  filter(is.na(correct)) %>% 
+  count
+```
+
+
+Amend cumulative dose table before merging:
+```{r}
+cumulativedosefinal<-cumulativedosefinal %>% 
+  mutate(cumulativedose_epirubicin=ifelse(cumulativedose_epirubicin==0,NA,cumulativedose_epirubicin)) %>% 
+  mutate(cumulativedose_docetaxel=ifelse(cumulativedose_docetaxel==0,NA,cumulativedose_docetaxel)) %>% 
+  mutate(cumulativedose_cyclo=ifelse(cumulativedose_cyclo==0,NA,cumulativedose_cyclo)) %>% 
+  mutate(cumulativedose_FU=ifelse(cumulativedose_FU==0,NA,cumulativedose_FU)) %>% 
+  group_by(PSEUDONYMISED_PATIENTID, CYCLE_NUMBER) %>% 
+  fill(cumulativedose_epirubicin:cumulativedose_FU,.direction="updown") %>% 
+  distinct(PSEUDONYMISED_PATIENTID,CYCLE_NUMBER,.keep_all=T) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  fill(cumulativedose_epirubicin:cumulativedose_FU,.direction="down") %>% 
+  mutate(cumulativedose_epirubicin=ifelse(is.na(cumulativedose_epirubicin),0,cumulativedose_epirubicin)) %>% 
+  mutate(cumulativedose_docetaxel=ifelse(is.na(cumulativedose_docetaxel),0,cumulativedose_docetaxel)) %>% 
+  mutate(cumulativedose_cyclo=ifelse(is.na(cumulativedose_cyclo),0,cumulativedose_cyclo)) %>% 
+  mutate(cumulativedose_FU=ifelse(is.na(cumulativedose_FU),0,cumulativedose_FU)) %>% 
+  ungroup()
+```
+
+
+Merge cumulative dose for each drug into the dataset:
+```{r}
+#dataset<-dataset %>% 
+#  rename(CYCLE_NUMBER=numberofcycles) %>% 
+#  merge(cumulativedosefinal, by=c("PSEUDONYMISED_PATIENTID", "CYCLE_NUMBER"))
+
+dataset %>% 
+  ungroup() %>% 
+  skimr::skim()
+```
+
+Set threshold value markers when patients achieve the threshold for >90% dose, which we will treat as full-dose.
+```{r}
+dataset<-dataset %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(epirubicin_threshold=ifelse(cumulativedose_epirubicin>(75*6)&REGIMEN=="EC",1,NA)) %>% 
+  mutate(epirubicin_threshold=ifelse(cumulativedose_epirubicin>(100*3)&REGIMEN=="ECT",1,epirubicin_threshold)) %>% 
+  mutate(epirubicin_threshold=ifelse(cumulativedose_epirubicin>(100*3)&REGIMEN=="FECT",1,epirubicin_threshold)) %>% 
+  mutate(cyclophosphamide_threshold=ifelse(cumulativedose_cyclo>(600*6)&REGIMEN=="EC",1,NA)) %>% 
+  mutate(cyclophosphamide_threshold=ifelse(cumulativedose_cyclo>(500*3)&REGIMEN=="ECT",1,cyclophosphamide_threshold)) %>% 
+  mutate(cyclophosphamide_threshold=ifelse(cumulativedose_cyclo>(500*3)&REGIMEN=="FECT",1,cyclophosphamide_threshold)) %>% 
+  mutate(docetaxel_threshold=ifelse(cumulativedose_docetaxel>(100*3)&REGIMEN=="ECT",1,0)) %>% 
+  mutate(docetaxel_threshold=ifelse(cumulativedose_docetaxel>(100*3)&REGIMEN=="FECT",1,docetaxel_threshold)) %>% 
+    
+  mutate(FU_threshold=ifelse(cumulativedose_FU>(500*3)&REGIMEN=="FECT",1,0))
+
+```
+Add missing BMI flag:
+```{r}
+dataset<-dataset %>% 
+  merge(missingBMIflag, by = "PSEUDONYMISED_PATIENTID")
+
+```
+
+
+
+```{r}
+dataset %>% 
+  distinct(PSEUDONYMISED_PATIENTID,numberofcycles, interval,.keep_all=T) %>% 
+  arrange(PSEUDONYMISED_PATIENTID, interval) %>% 
+  write_csv("breastCCWdataset22NOV.csv")
+
+dataset %>% 
+  filter(survivalmarker==0)
+
+#dataset %>% 
+#  arrange(PSEUDONYMISED_PATIENTID, interval) %>% 
+#  group_by(PSEUDONYMISED_PATIENTID) %>% 
+#  fill(survivalmarker,.direction = "updown") %>% 
+#  fill(discontinuation,.direction = "updown") %>% 
+# ungroup() %>% 
+#  skimr::skim()
+#
+#dataset %>%distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>%  ungroup() %>% 
+#  skimr::skim()
+
+#dataset %>% 
+#  count(REGIMEN)
+```
+
+
+
 Count number of cycles per patient and describe early discontinuation:
 ```{r}
 numberofcycles<-dataset %>% 
-  arrange(PSEUDONYMISED_PATIENTID, desc(numberofcycles)) %>% 
-  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
-  select(PSEUDONYMISED_PATIENTID:QUINTILE_2015, numberofcycles)
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) 
 
-numberofcycles<-numberofcycles %>% 
-  group_by(PSEUDONYMISED_PATIENTID) %>% 
-  mutate(earlydiscontinuation=ifelse(numberofcycles<6,1,0)) %>% 
-  ungroup()
+
+numberofcycles%>% 
+ count(maxcycle)
+
 
 numberofcycles %>% 
-  count(numberofcycles)
+  count(maxcycle,STAGE_BEST)
 ```
 
+Plot number of cycles split by stage, histology etc
+```{r}
+dataset<-dataset %>%
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>% 
+  ungroup() 
+
+dataset<-dataset %>%
+  mutate(`Early Discontinuation`=ifelse(maxcycle<6,1,0))
+
+descriptives<-dataset %>%
+ distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  group_by(REGIMEN) %>% 
+  mutate(sumregimen = n()) %>% 
+  mutate(percentageregimen=sumregimen/12388)
+
+
+
+stagedescriptives<-dataset %>%
+ distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  group_by(STAGE_BEST) %>% 
+  mutate(sumstage = n()) %>% 
+  mutate(percentagestage=sumstage/12388)
+
+stagedescriptives %>% 
+  select(STAGE_BEST, maxcycle) %>% 
+  mutate(maxcycle=ifelse(maxcycle<6,"<6",maxcycle)) %>% 
+  mutate(maxcycle=ifelse(maxcycle>6,">6",maxcycle)) %>% 
+
+  tbl_summary(by="STAGE_BEST") %>% 
+  add_ci()
+
+
+histologydescriptives<-dataset %>%
+ distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  group_by(HISTOLOGY) %>% 
+  mutate(sumstage = n()) %>% 
+  mutate(percentagehistology=sumstage/12388)
+
+gghistogram(descriptives, x = "percentageregimen", fill = "REGIMEN", colour = "REGIMEN")
+gghistogram(stagedescriptives, x = "maxcycle", fill = "STAGE_BEST",colour = "STAGE_BEST", rug = FALSE)
+gghistogram(stagedescriptives, x = "maxcycle", fill = "HISTOLOGY",colour = "HISTOLOGY", rug = FALSE)
+
+gghistogram(histologydescriptives, x = "percentagehistology", fill = "HISTOLOGY",colour = "HISTOLOGY", rug = FALSE)
+
+```
+Table 1:
+```{r}
+library(gtsummary)
+#library(gtsave)
+#install.packages("gtsave")
+
+dataset<-dataset %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>% 
+  mutate(modality=ifelse(maxcycle<6,"<6",NA)) %>% 
+   mutate(modality=ifelse(maxcycle==6,"6",modality)) %>% 
+   mutate(modality=ifelse(maxcycle>6,"6<",modality))
+
+dataset$BMI2<-cut(dataset$BMI, breaks = c(0,18.5,25,30,40,99))
+
+dataset %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  ungroup() %>% 
+  select(-PSEUDONYMISED_PATIENTID) %>% 
+  select(BMI,BMI2, modality) %>% 
+  tbl_summary(by="modality") %>% 
+  add_overall()
+
+
+tableone<-dataset %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  select(-PSEUDONYMISED_PATIENTID,-interval,-survivalmarker,-discontinuation) %>% 
+  select(modality,AGE_AT_FIRST_TREATMENT,STAGE_BEST,HISTOLOGY,BMI2, REGIMEN,surgery_setting, TRASTUZUMAB_FLAG, maxcycle, HISTOLOGY, QUINTILE_2015,CHRL_TOT_27_03,ETHNICITYNAME, Commissioning.region, CENTRE_TYPE) %>% 
+  tbl_summary(by="modality") %>% 
+  add_overall()
+
+tableone %>% 
+  as_gt() %>% 
+  gt::gtsave("tableone.docx")
+```
 Early discontinuation by ethnicity:
 ```{r}
-numberofcycles %>% 
-  ungroup() %>% 
-  select(ETHNICITYNAME,earlydiscontinuation) %>% 
+dataset<-dataset %>%
+  mutate(`Early Discontinuation`=ifelse(maxcycle<6,1,0))
+
+dataset %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  select(-PSEUDONYMISED_PATIENTID,-interval,-survivalmarker,-discontinuation) %>% 
+  select(`Early Discontinuation`,maxcycle,AGE_AT_FIRST_TREATMENT, REGIMEN, TRASTUZUMAB_FLAG, maxcycle, surgery_setting,STAGE_BEST, HISTOLOGY, QUINTILE_2015,CHRL_TOT_27_03,ETHNICITYNAME, Commissioning.region, CENTRE_TYPE) %>% 
   tbl_summary(by="ETHNICITYNAME") %>% 
   add_overall() %>% 
   add_p()
@@ -1446,55 +2030,285 @@ numberofcycles %>%
 
 Early discontinuation by histology:
 ```{r}
-numberofcycles %>% 
-  ungroup() %>% 
-  select(HISTOLOGY,earlydiscontinuation) %>% 
+
+
+dataset %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  select(-PSEUDONYMISED_PATIENTID,-interval,-survivalmarker,-discontinuation) %>% 
+  select(`Early Discontinuation`,maxcycle,AGE_AT_FIRST_TREATMENT, REGIMEN, TRASTUZUMAB_FLAG, maxcycle, surgery_setting,STAGE_BEST, HISTOLOGY, QUINTILE_2015,CHRL_TOT_27_03,ETHNICITYNAME, Commissioning.region, CENTRE_TYPE) %>% 
   tbl_summary(by="HISTOLOGY") %>% 
+  add_overall() %>% 
+  add_p() %>% 
+  add_ci()
+```
+Early discontinuation by stage:
+```{r}
+dataset %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  select(-PSEUDONYMISED_PATIENTID,-interval,-survivalmarker,-discontinuation) %>% 
+  select(`Early Discontinuation`,maxcycle,AGE_AT_FIRST_TREATMENT, REGIMEN, TRASTUZUMAB_FLAG, maxcycle, surgery_setting,STAGE_BEST, HISTOLOGY, QUINTILE_2015,CHRL_TOT_27_03,ETHNICITYNAME, Commissioning.region, CENTRE_TYPE) %>% 
+  tbl_summary(by="STAGE_BEST") %>% 
   add_overall() %>% 
   add_p()
 ```
+
+
 Early discontinuation by IMD:
 ```{r}
-numberofcycles %>% 
+dataset %>% 
   ungroup() %>% 
-  select(QUINTILE_2015 ,earlydiscontinuation) %>% 
+  select(QUINTILE_2015 ,`Early Discontinuation`) %>% 
   tbl_summary(by="QUINTILE_2015") %>% 
   add_overall() %>% 
-  add_p()
+  add_p() %>% 
+  add_ci()
 ```
 Early discontinuation by Age:
 ```{r}
+dataset$AGE<-cut(dataset$AGE_AT_FIRST_TREATMENT, breaks = c(0,60,150))
 
-numberofcycles$AGE<-cut(numberofcycles$AGE_AT_FIRST_TREATMENT, breaks = c(0,50,60,70,150))
-
-numberofcycles %>% 
+dataset %>% 
   ungroup() %>% 
-  select(AGE ,earlydiscontinuation) %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  select(AGE,`Early Discontinuation`, numberofcycles) %>% 
   tbl_summary(by="AGE") %>% 
   add_overall() %>% 
-  add_p()
+  add_p() %>% 
+  add_ci()
 ```
 
 Early discontinuation by BMI:
 ```{r}
 
-numberofcycles$BMI2<-cut(numberofcycles$BMI, breaks = c(0,18.5,25,30,40,99))
+dataset$BMI2<-cut(dataset$BMI, breaks = c(0,18.5,25,30,40,99))
 
-numberofcycles %>% 
+dataset %>% 
   ungroup() %>% 
-  select(earlydiscontinuation ,BMI2) %>% 
+  select(`Early Discontinuation` ,BMI2) %>% 
   tbl_summary(by="BMI2") %>% 
   add_overall() %>% 
-  add_p()
+  add_p() %>% 
+  add_ci()
 ```
 
 Early discontinuation by region:
 ```{r}
-numberofcycles %>% 
+dataset %>% 
   ungroup() %>% 
-  select(Commissioning.region,earlydiscontinuation) %>% 
+  select(Commissioning.region,`Early Discontinuation`) %>% 
   tbl_summary(by="Commissioning.region") %>% 
   add_overall() %>% 
   add_p() %>% 
   add_ci()
 ```
+
+Number of cycles broken down by regimen:
+
+```{r}
+descriptive <- dataset %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T)
+
+regimendescriptive<-descriptive %>%
+  count(REGIMEN) %>% 
+  merge(descriptive,by="REGIMEN") %>% 
+  count(REGIMEN, maxcycle,n) %>% 
+  merge(descriptive,by=c("REGIMEN", "maxcycle")) %>% 
+  mutate(percentage=nn/n*100)
+  
+
+regimendescriptive<-regimendescriptive %>% 
+  select(REGIMEN,maxcycle, n, nn, percentage) %>% 
+  distinct(REGIMEN,maxcycle, percentage)
+
+  ggplot(regimendescriptive, aes(x = percentage, fill = HISTOLOGY, colour = HISTOLOGY)) + 
+  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(2:9), lim = c(0,8))
+  
+ggplot(regimendescriptive, aes(x = percentage, fill = REGIMEN, colour = REGIMEN)) + 
+  geom_bar() + xlab("Number of cycles") + ylab("n") +ylim(0,100)+xlim(0,8)
+
+ggplot(percentage, aes(x = percentage, fill = REGIMEN, colour = REGIMEN)) + geom_bar() + scale_x_continuous(breaks = 1:16)
+
+descriptive %>% 
+  filter(maxcycle==8)
+```
+
+Number of cycles broken down by cancer stage:
+```{r}
+descriptive<-descriptive %>% 
+  rename(`Cancer stage`=STAGE_BEST)
+
+descriptive %>% 
+  filter(maxcycle==8)
+
+descriptive %>% 
+  group_by(STAGE_BEST) %>% 
+  count(STAGE_BEST, modality) %>% 
+  merge(descriptive, by = c("STAGE_BEST","modality")) %>% 
+  merge(stagecount, by ="STAGE_BEST") 
+  mutate(percentage=n//n)
+
+ggplot(descriptive, aes(x = maxcycle, fill = `Cancer stage`, colour = `Cancer stage`)) + 
+  geom_bar(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(0:8), lim = c(0,8.5))+ xlab("Number of cycles") + ylab("n")
+```
+Number of cycles by histology:
+```{r}
+descriptive <- descriptive %>% 
+  rename(`Hormone status`=HISTOLOGY)
+
+ggplot(descriptive, aes(x = maxcycle, fill = `Hormone status`, colour = `Hormone status`)) + 
+  geom_bar(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(0:8), lim = c(0,8.5))+ xlab("Number of cycles") + ylab("n")
+
+```
+
+Number of cycles by region:
+```{r}
+descriptive <-dataset %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) 
+
+
+
+descriptive <- descriptive %>% 
+  rename(Region=Commissioning.region) %>% 
+  mutate(Region=ifelse(Region=="EAST OF ENGLAND COMMISSIONING REGION","East of England",Region)) %>% 
+   mutate(Region=ifelse(Region=="NORTH EAST & YORKSHIRE COMMISSIONING REGION", "North East & Yorkshire",Region)) %>% 
+   mutate(Region=ifelse(Region=="LONDON COMMISSIONING REGION","London",Region)) %>% 
+   mutate(Region=ifelse(Region=="NORTH WEST COMMISSIONING REGION","North West",Region)) %>% 
+   mutate(Region=ifelse(Region=="SOUTH WEST COMMISSIONING REGION","South West",Region)) %>% 
+   mutate(Region=ifelse(Region=="SOUTH EAST COMMISSIONING REGION","South East",Region)) %>% 
+   mutate(Region=ifelse(Region=="MIDLANDS COMMISSIONING REGION", "Midlands",Region))
+
+ggplot(descriptive, aes(x = maxcycle, fill = Region ,colour = Region)) + 
+  geom_bar(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(0:8), lim = c(0,8.5))+ xlab("Number of cycles") + ylab("n")
+
+
+descriptive %>% 
+  count(numbercycles)
+```
+
+Number of cycles broken down by age:
+```{r}
+descriptive$AGE2<-cut(descriptive$AGE_AT_FIRST_TREATMENT, breaks = c(0,50,60,70,100))
+ggplot(descriptive, aes(x = maxcycle, fill = AGE2 ,colour = AGE2)) + 
+  geom_bar(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(0:8), lim = c(0,8.5))+ xlab("Number of cycles") + ylab("n")
+```
+
+For Pinkie: for patient's receiving less than 6 cycles, investigate length between cycles. If large break we may have missing data and need to change this.
+```{r}
+
+investigation<-surgery %>% 
+  filter(str_detect(EVENTDESC., "curative")) %>% 
+  merge(table2, by= "PSEUDONYMISED_TUMOURID") %>% 
+  select(PSEUDONYMISED_PATIENTID, EVENTDATE, EVENTDESC) %>% 
+merge(investigation, by = "PSEUDONYMISED_PATIENTID") %>% 
+  ungroup() %>% 
+  arrange(PSEUDONYMISED_PATIENTID, ADMINISTRATION_DATE)
+
+
+investigation2<-investigation %>% 
+  select(PSEUDONYMISED_PATIENTID, DRUG_GROUP,EVENTDATE,EVENTDESC, ADMINISTRATION_DATE, CYCLE_NUMBER, DAYSFROMPREVIOUSADMIN, REGIMEN) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(flag=ifelse(DAYSFROMPREVIOUSADMIN>29,1,NA)) %>% 
+  fill(flag,.direction = "updown") %>% 
+  filter(flag==1) 
+
+investigation2%>% 
+  arrange(PSEUDONYMISED_PATIENTID, CYCLE_NUMBER) %>% 
+  write_csv("cycle_numbers_breastcancer.csv")
+
+investigation2 %>% 
+  count(PSEUDONYMISED_PATIENTID)
+```
+
+For Pinkie: BSA, investigate how many patients get less than 100% dose on first cycle and if this is linked to high BSA>2.
+```{r}
+
+  BSA_investigation<-doses_grouped %>% 
+  merge(completedData, by = c("PSEUDONYMISED_PATIENTID")) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  filter(ADMINISTRATION_DATE==min(ADMINISTRATION_DATE)) %>% 
+  rename(REGIMEN=REGIMEN.x) %>% 
+  group_by(PSEUDONYMISED_PATIENTID, DRUG_GROUP) %>% 
+  mutate(EXPECTED_DOSE = case_when(
+     DRUG_GROUP == "EPIRUBICIN" & REGIMEN == "EC"  ~ (75),
+     DRUG_GROUP == "CYCLOPHOSPHAMIDE" & REGIMEN == "EC" ~ (600),
+     DRUG_GROUP == "EPIRUBICIN" & REGIMEN == "ECT"  ~ (100),
+     DRUG_GROUP == "CYCLOPHOSPHAMIDE" & REGIMEN == "ECT" ~ (500),
+     DRUG_GROUP == "DOCETAXEL" & REGIMEN == "ECT" ~ (100),
+     DRUG_GROUP == "EPIRUBICIN" & REGIMEN == "FECT"  ~ (100),
+     DRUG_GROUP == "CYCLOPHOSPHAMIDE" & REGIMEN == "FECT" ~ (500),
+     DRUG_GROUP == "FLUOROURACIL" & REGIMEN == "FECT" ~ (500),
+     DRUG_GROUP == "DOCETAXEL" & REGIMEN == "FECT" ~ (100),
+     DRUG_GROUP == "EPIRUBICIN" & REGIMEN == "FEC"  ~ (100),
+     DRUG_GROUP == "CYCLOPHOSPHAMIDE" & REGIMEN == "FEC" ~ (500),
+     DRUG_GROUP == "FLUOROURACIL" & REGIMEN == "FEC" ~ (500))) %>% 
+     group_by(PSEUDONYMISED_PATIENTID, DRUG_GROUP) %>%
+     mutate(cumulativedose=cumsum(ACTUAL_DOSE_PER_ADMINISTRATION)) %>% 
+     mutate(cumulativedoseBSA=cumulativedose/BSA) %>% 
+     mutate(percentage_dose=cumulativedoseBSA/EXPECTED_DOSE*100) %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  select(PSEUDONYMISED_PATIENTID, DRUG_GROUP,ACTUAL_DOSE_PER_ADMINISTRATION,cumulativedoseBSA, REGIMEN, ADMINISTRATION_DATE, percentage_dose, BSA) %>% 
+  ungroup()
+
+BSA_investigation<-BSA_investigation %>% 
+  mutate(dosereduction=ifelse(percentage_dose<90,1,0)) 
+
+dosereductionhist<-BSA_investigation %>% 
+  count(dosereduction, REGIMEN) %>% 
+  group_by(REGIMEN) %>% 
+  mutate(percent=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(percent=n/percent*100)
+
+ggplot(BSA_investigation, aes(x = percentage_dose, fill = REGIMEN, colour = REGIMEN)) + 
+  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(0:125), lim = c(75,100))
+
+BSA_investigation<-BSA_investigation %>% 
+  mutate(BSAflag=ifelse(BSA>2,1,0))
+
+ggplot(BSA_investigation, aes(x = percentage_dose, fill = REGIMEN, colour = REGIMEN)) + 
+  geom_histogram(alpha = 0.5, position = "dodge") + scale_x_continuous(breaks = seq(0:125), lim = c(75,100))
+
+
+BSA_investigation %>% 
+  count(REGIMEN, BSAflag,dosereduction) %>% 
+  group_by(REGIMEN) %>% 
+  mutate(sum=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(percentoverBSA=n/sum*100) %>% 
+  select(REGIMEN, BSAflag, percentoverBSA)
+
+
+BSA_investigation %>%
+  
+
+ggscatter(graph, x = "percentage_dose", y = "BSA", color = "REGIMEN",
+   palette = c("#00AFBB", "#E7B800", "#FC4E07") )
+```
+
+
+
+```{r}
+data<-
+  read_csv("breastCCWdataset26NOV.csv",
+  col_names = TRUE,
+  col_types = cols(.default = col_character()),
+  col_select = NULL)
+
+data %>% 
+  group_by(PSEUDONYMISED_PATIENTID) %>% 
+  mutate(maxcycle=max(numberofcycles)) %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  ungroup() %>% 
+  count(maxcycle)
+```
+```{r}
+dataset %>% 
+ filter(AGE_AT_FIRST_TREATMENT<60) %>% 
+  ungroup() %>% 
+  distinct(PSEUDONYMISED_PATIENTID,.keep_all=T) %>% 
+  count(maxcycle)
+```
+
+
